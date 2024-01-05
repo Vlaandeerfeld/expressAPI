@@ -56,7 +56,7 @@ app.get(`/fhmplayer`, async function (req, res) {
 													...rows[x]
 												};
 												players.push(playerToPush);
-//												console.log(players);
+												console.log(players);
 												conn.end()
 													.then(error => {
 														console.log(error);
