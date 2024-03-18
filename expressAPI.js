@@ -7,6 +7,14 @@ import mariadb from 'mariadb';
 
 app.use(cors())
 
+const pool = mariadb.createPool({
+	host: '10.0.0.142', 
+	user:'MrDefity', 
+	password: 'FrankNBeanz',
+	database: 'nhl',
+	connectionLimit: 5
+});
+
 app.get(`/nhlplayer`, async function (req, res) {
     getPlayer(req.header('playerid'))
 		.then(response => response)
@@ -24,69 +32,97 @@ app.get(`/nhlplayer`, async function (req, res) {
 
 app.get(`/fhmplayer`, async function (req, res) {
 
-	const pool = mariadb.createPool({
-		host: '10.0.0.142', 
-		user:'MrDefity', 
-		password: 'FrankNBeanz',
-		database: 'nhl',
-		connectionLimit: 5
-    });
+	console.log(JSON.stringify(req.headers));
 
-	let startDate = req.header('season').slice(0, 4) + '-07-01';
-	let endDate = req.header('season').slice(4) + '-05-01';
-	let players = ['there'];
-	pool.getConnection()
-    	.then(conn => { 
-			let players = ['hello'];
-    		conn.query("Select Player_Id, count(Player_Id), sum(Goals), sum(Assists), sum(Goals + Assists) from player_stats WHERE Dates >= ? AND Dates <= ? AND Player_Id != -1 AND League_Id = 0 GROUP BY Player_Id ORDER BY sum(Goals) DESC LIMIT 10", ([startDate, endDate]))
-        		.then((rows) => {
-					for(let x in rows){
-						conn.query("Select Player_Id, Team_Id, First_Name, Last_Name from players where season = ? AND Player_Id = ?", [req.header('season').slice(0, 4) + '/' + req.header('season').slice(4), rows[x]['Player_Id']])
-							.then((rows1) => {
-										conn.query('Select Name from teams where Team_Id = ?', rows1[0]['Team_Id'])
-											.then(rows2 => {
-												rows[x]['count(Player_Id)'] = Number(rows[x]['count(Player_Id)']);
-												for (let z in rows2){
-													if(rows1[0]['Team_Id'] = rows2[z]['Name']){
-														rows1[0]['Team_Id'] = rows2[z]['Name'];
-													} 
-												}
-												let playerToPush = {
-													...rows1[0],
-													...rows[x]
-												};
-												players.push(playerToPush);
-												console.log(players);
-												conn.end()
-													.then(error => {
-														console.log(error);
-													});
-											});
-							})
-							conn.end()
-								.then(error => {
-								console.log(error);
-							});
-					}
-					console.log(players)
-    			})
-				.then(() =>{
-					console.log(players);
-				})
-				conn.end()
-				.then(error => {
-					console.log(error);
-				});	
-			console.log(players);
-			res.send(players);		
-		}).catch(err => {
-    		console.log(err);
-   		})
-		.finally(() =>{
-			console.log(players);
-		});   
-})
+		let startDate = req.header('season').slice(0, 4) + '-07-01';
+		let endDate = req.header('season').slice(4) + '-05-01';
+		let season = req.header('season').slice(0, 4) + '/' + req.header('season').slice(4);
+
+		const promise1 = await getPlayersStats(startDate, endDate)
+			.then(async info => {
+				return info.map(async data => {
+					return ({
+						playerId: data.Player_Id,
+						GP: Number(data['count(Player_Id)']),
+						Goals: data['sum(Goals)'],
+						Assists: data['sum(Assists)'],
+						Points: data['sum(Goals + Assists)'],
+					});
+				});
+			});
+
+		const playerStats = await Promise.all(promise1)
+
+		const promise2 = playerStats.map(async info => {
+			console.log(info);
+			return await getPlayersBio(season, info.playerId)
+				.then(data => {
+					console.log(data);
+					return ({
+						playerId: data[0].Player_Id,
+						teamId: data[0].Team_Id,
+						firstName: data[0].First_Name,
+						lastName: data[0].Last_Name,
+					});
+				});
+		});
+
+		const playerBios = await Promise.all(promise2);
 		
+		const promise3 = playerBios.map(async info => {
+			return await getPlayersTeam(info.teamId)
+				.then(data => {
+					return ({
+						playerId: info.playerId,
+						teamName: data[0].Name,
+					})
+				})
+		})
+
+		const playerTeams = await Promise.all(promise3);
+
+		const playerStatsBios = playerStats.map(info => ({
+			...info,
+			...playerBios.find((element) => {
+				return element.playerId === info.playerId
+			}),
+		}));
+
+		const playerStatsBiosTeams = playerStatsBios.map(info => ({
+			...info,
+			...playerTeams.find((element) => {
+				return element.playerId === info.playerId
+			}),
+		}));
+
+		console.log(playerStatsBiosTeams);
+		res.send(playerStatsBiosTeams);
+			
+		async function getPlayersStats(startDate, endDate){
+			return pool.getConnection()
+    			.then(conn => { 
+					conn.end();
+    				return conn.query("Select Player_Id, count(Player_Id), sum(Goals), sum(Assists), sum(Goals + Assists) from player_stats WHERE Dates >= ? AND Dates <= ? AND Player_Id != -1 AND League_Id = 0 GROUP BY Player_Id ORDER BY sum(Goals) DESC LIMIT 10", [startDate, endDate])
+				})
+			}
+				
+		async function getPlayersBio(season, playerId){
+			return pool.getConnection()
+				.then(conn => {
+					conn.end();
+					return conn.query("Select Player_Id, Team_Id, First_Name, Last_Name from players where Season = ? AND Player_Id = ?", [season, playerId])
+				});
+		}
+		async function getPlayersTeam(team){
+			console.log(team);
+			return pool.getConnection()
+				.then(conn => {
+					conn.end();
+					return conn.query("Select Name from teams where Team_Id = ?", [team])
+				});
+		}	
+})
+
 
 app.get(`/nhlteams`, async function (req, res) {
     getTeamABV(req.header('team'))
@@ -108,6 +144,22 @@ app.get(`/nhlteams`, async function (req, res) {
 				}
 			}, error => console.log(error));
 	}    
+})
+
+app.get(`/fhmteams`, async function (req, res) {
+
+    await getTeamName()
+		.then(data => {
+			res.send(data);
+		});
+
+	async function getTeamName(){
+		return pool.getConnection()
+		.then(conn => { 
+			conn.end();
+			return conn.query("Select Name from teams where League_Id = 0")
+		})
+	}
 })
 
 app.get(`/nhlteamstats`, async function (req, res) {
