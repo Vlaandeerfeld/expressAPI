@@ -285,7 +285,7 @@ app.get(`/fhmteam`, async function (req, res) {
 
 		const teamIdent = await Promise.all(promise2);
 
-		console.log(teamIdent);
+		console.log("Team Ident: " + teamIdent);
 
 		const promise1 = teamIdent.map(async info => {
 			return await getTeamStats(season, info.teamId)
@@ -476,7 +476,7 @@ app.get(`/fhmplayer`, async function (req, res) {
 		leagueId = req.header('league');
 	}
 	else{
-		leagueId = 'ALL';
+		leagueId = 'NHL';
 	}
 	if (req.header('team') != null) {
 		teamId = req.header('team');
@@ -488,7 +488,7 @@ app.get(`/fhmplayer`, async function (req, res) {
 		gameType = req.header('gametype');
 	}
 	else{
-		gameType = 'ALL';
+		gameType = 'REGULAR SEASON';
 	}
 
 	const pool = mariadb.createPool({
@@ -497,7 +497,222 @@ app.get(`/fhmplayer`, async function (req, res) {
 		password: 'FrankNBeanz',
 		database: databaseHeader,
 		connectionLimit: 5,
-		acquireTimeout: 60000
+		acquireTimeout: 600000
+	});
+
+	let startDate;
+	let endDate;
+	let season;
+
+	if(req.header('season') !== 'ALL' && req.header('season') != undefined){
+		startDate = req.header('season').slice(0, 4) + '-07-01';
+		endDate = req.header('season').slice(5) + '-06-30';
+		season = req.header('season');
+	}
+	else{
+		season = '2034/2035';
+		startDate = 'ALL';
+		endDate = 'ALL';
+	}
+
+	console.log(teamId);
+	console.log(season);
+	console.log(leagueId);
+
+	const league = await getLeagueStats(leagueId);
+
+	const promise1 = await getPlayersTeam(teamId, season, league)
+		.then(async data => {
+			return data.map(info => {
+				return ({
+					TeamId: info.TeamId,
+					teamName: info.Abbr,
+				});
+			});
+		});
+
+	const playerTeam = await Promise.all(promise1)
+
+	const promise2 = playerTeam.map(async info => {
+		if(info != undefined){
+		return await getPlayersBio(season, info.TeamId)
+		.then(async data => {
+			const promise2a = await data.map(async data2 => {
+				if(data2.G != 20 && data2.PlayerId != undefined){
+					return ({
+						playerId: data2.PlayerId,
+						TeamId: data2.TeamId,
+						firstName: data2.First_Name,
+						lastName: data2.Last_Name,
+					});
+				}
+				else{
+					return ({
+						playerId: undefined,
+						TeamId: undefined,
+						firstName: undefined,
+						lastName: undefined,
+					});
+				}
+			})
+			return promise2a
+		})
+		.then(response => {return Promise.all(response)})
+	}
+	});
+		const playerBios = await Promise.all(promise2)
+
+		const promise3 = playerBios.map(async info => {
+			    const promise3a = info.map(async info2 => {
+				if(info2.playerId != undefined){
+					const promise3b = await getPlayersStats(season, info2.playerId)
+						.then(async data => {
+								return data.find(data2 => {data2.PlayerId != undefined})
+							});
+							
+					const resultsb = await Promise.resolve(promise3b)
+					return resultsb;
+
+				}
+			});
+			const resultsa = await Promise.all(promise3a)
+			return resultsa;
+		});
+
+		const playerStats = await Promise.all(promise3);
+
+		console.log(playerStats[0]);
+
+		const playerBiosTeam = playerBios.map(info => {
+			return info.map(data => {	
+				return [
+					playerTeam.filter((element) => element.playerId === data.playerId),
+					data,
+				]
+			});
+		});
+
+		const playerStatsBiosTeams = playerBiosTeam.map(info => {
+			return info.map(data => {	
+				return {
+					...playerStats.find((element) => element.playerId === data.playerId),
+					...data,
+				}
+			});
+		});
+
+
+		const playerStatsBiosTeamsSimplify = playerStatsBiosTeams.filter(element => {
+			return element.playerId != undefined;
+		 });
+
+		res.send(playerStatsBiosTeamsSimplify);
+				
+		async function getPlayersBio(season, teamId){
+			return pool.getConnection()
+				.then(conn => {
+					if(teamId === 'ALL' && season === 'ALL'){
+						conn.end();
+						return conn.query("Select PlayerId, TeamId, First_Name, Last_Name, G from players Group By PlayerId")
+					}
+					else if(season === 'ALL'){
+						conn.end();
+						return conn.query("Select PlayerId, TeamId, First_Name, Last_Name, G from players where TeamId = ? Group By PlayerId", [teamId])
+					}
+					else if(teamId === 'ALL'){
+						conn.end();
+						return conn.query("Select PlayerId, TeamId, First_Name, Last_Name, G from players where Season = ? Group By PlayerId", [season])
+					}
+					else{
+						conn.end();
+						return conn.query("Select PlayerId, TeamId, First_Name, Last_Name, G from players where Season = ? AND TeamId = ? Group By PlayerId", [season, teamId])
+					}
+			});
+		}
+		async function getPlayersTeam(teamId, season, leagueId){
+			return pool.getConnection()
+				.then(conn => {
+					if(teamId === 'ALL' && season === 'ALL'){
+						conn.end();
+						return conn.query("Select Abbr, TeamId from teams Where LeagueId = ? Group By TeamId", [leagueId])
+					}
+					else if(teamId === 'ALL'){
+						conn.end();
+						return conn.query("Select Abbr, TeamId from teams where Season = ? Group By TeamId", [season])
+					}
+					else if(season === 'ALL'){
+						conn.end();
+						return conn.query("Select Abbr, TeamId from teams where Abbr = ? Group By TeamId", [teamId])
+					}
+					else{
+						conn.end();
+						return conn.query("Select Abbr, TeamId from teams Group By TeamId")
+					}
+				});
+		}
+
+	async function getPlayersStats(season, playerId){
+		return pool.getConnection()
+			.then(conn => { 
+				if(season === 'ALL'){
+					conn.end();
+					return conn.query("Select PlayerId, Season, TeamId, LeagueId, GP, G, A, G + A, PIM, PlusMinus, PPG, PPA, SHG, SHA, GR, GWG, SOG, FOW / FO, HIT, GvA, TkA, SB, TOI, PPTOI, SHTOI, Fights, Fights_Won from player_career_rs WHERE PlayerId = ? ORDER BY G + A DESC", [playerId])
+				}
+				else{
+					conn.end();
+					return conn.query("Select PlayerId, Season, TeamId, LeagueId, GP, G, A, G + A, PIM, PlusMinus, PPG, PPA, SHG, SHA, GR, GWG, SOG, FOW / FO, HIT, GvA, TkA, SB, TOI, PPTOI, SHTOI, Fights, Fights_Won from player_career_rs WHERE Season = ? AND PlayerId = ? ORDER BY G + A DESC", [season.slice(0,3), playerId])
+				}
+			})
+	}
+
+	async function getLeagueStats(leagueId){
+		return pool.getConnection()
+			.then(conn => { 
+				conn.end();
+				return conn.query("Select LeagueId from league Where AbbrLeague = ? GROUP BY LeagueId", [leagueId])
+			})
+	}
+})
+
+app.get(`/fhmplayergame`, async function (req, res) {
+
+	let databaseHeader;
+	let leagueId;
+	let teamId;
+	let gameType;
+
+	if (req.header('database') != null) {
+		databaseHeader = req.header('database');
+	}
+	else{
+		databaseHeader = 'NHL';
+	}
+	if (req.header('league') != null) {
+		leagueId = req.header('league');
+	}
+	else{
+		leagueId = 'NHL';
+	}
+	if (req.header('team') != null) {
+		teamId = req.header('team');
+	}
+	else{
+		teamId = 'ALL';
+	}
+	if (req.header('gametype') != null) {
+		gameType = req.header('gametype');
+	}
+	else{
+		gameType = 'Regular Season';
+	}
+
+	const pool = mariadb.createPool({
+		host: '192.168.2.15', 
+		user:'MrDefity', 
+		password: 'FrankNBeanz',
+		database: databaseHeader,
+		connectionLimit: 5,
+		acquireTimeout: 600000
 	});
 
 	let startDate;
@@ -521,63 +736,88 @@ app.get(`/fhmplayer`, async function (req, res) {
 
 	const promise1 = await getPlayersTeam(teamId, season, leagueId)
 		.then(async data => {
-			console.log(data);
-			return ({
-				TeamId: data[0].TeamId,
-				teamName: data[0].Abbr,
-			})
+			return data.map(info => {
+				return ({
+					TeamId: info.TeamId,
+					teamName: info.Abbr,
+				});
+			});
 		});
 
-	const playerTeam = await Promise.all([promise1])
+	const playerTeam = await Promise.all(promise1)
 
 	console.log(playerTeam);
 
 	const promise2 = playerTeam.map(async info => {
 		if(info != undefined){
-		return await getPlayersBio(info.TeamId)
+		return await getPlayersBio(season, info.TeamId)
 		.then(async data => {
-			if(data.G != 20 && data.PlayerId != undefined){
-				return ({
-					playerId: data[0].PlayerId,
-					TeamId: data[0].TeamId,
-					firstName: data[0].First_Name,
-					lastName: data[0].Last_Name,
-				});
-			}
-			else{
-				return ({
-				playerId: undefined,
-				TeamId: undefined,
-				firstName: undefined,
-				lastName: undefined,
-				});
-			}
-		});
+			const promise2a = await data.map(async data2 => {
+				if(data2.G != 20 && data2.PlayerId != undefined){
+					return ({
+						playerId: data2.PlayerId,
+						TeamId: data2.TeamId,
+						firstName: data2.First_Name,
+						lastName: data2.Last_Name,
+					});
+				}
+				else{
+					return ({
+						playerId: undefined,
+						TeamId: undefined,
+						firstName: undefined,
+						lastName: undefined,
+					});
+				}
+			})
+			return promise2a
+		})
+		.then(response => {return Promise.all(response)})
 	}
 	});
 
 		const playerBios = await Promise.all(promise2)
+		console.log(playerBios);
 
 		const promise3 = playerBios.map(async info => {
-			if(info.playerId != undefined){
-			return await getPlayersStats(info.playerId)
-				.then(async data => {
-					if(data[0] != undefined){
-						return ({
-							playerId: data[0].PlayerId,
-							GP: Number(data[0]['count(PlayerId)']),
-							Goals: data[0]['sum(Goals)'],
-							Assists: data[0]['sum(Assists)'],
-							Points: data[0]['sum(Goals + Assists)'],
-						})
-					}
-				})
-			}
+			console.log("there" + info);
+			    const promise3a = info.map(async info2 => {
+				console.log("cheer " + info2.playerId);
+				if(info2.playerId != undefined){
+					const promise3b = await getPlayersStats(startDate, endDate, info2.playerId)
+						.then(async data => {
+							console.log("asdasd" + data[0].PlayerId);
+							if(data[0].PlayerId != undefined){
+								return ({
+									playerId: data[0].PlayerId,
+									GP: Number(data[0]['count(PlayerId)']),
+									Goals: data[0]['sum(Goals)'],
+									Assists: data[0]['sum(Assists)'],
+									Points: data[0]['sum(Goals + Assists)'],
+									PlusMinus: data[0]['sum(PlusMinus)'], 
+									PIM: data[0]['sum(PIM)'],  
+									SOG: data[0]['sum(SOG)'], 
+									FOPer: data[0]['avg(FOPer)'],
+								})
+							}
+						});
+					const resultsb = await Promise.resolve(promise3b)
+					console.log("resultsb: " + resultsb.playerId);
+					return resultsb;
+
+				}
+			});
+			const resultsa = await Promise.all(promise3a)
+			console.log("resultsa: " + resultsa[0]);
+			return resultsa;
 		});
 
 		const playerStats = await Promise.all(promise3);
-		console.log(playerStats);
-		const playerBiosTeam = playerBios.map(info => ({
+
+		console.log("playerStats: " + playerStats[0]);
+		console.log("playerBios: " + playerBios[0]);
+
+		const playerBiosTeam = playerBios[0].map(info => ({
 			...info,
 			...playerTeam.find((element) => {
 				if(element != undefined){
@@ -586,31 +826,40 @@ app.get(`/fhmplayer`, async function (req, res) {
 			}),
 		}));
 
+		
+
+		playerBiosTeam.forEach(info => {
+			console.log("playerBiosTeam: " + info);
+		})
 		const playerStatsBiosTeams = playerBiosTeam.map(info => ({
 			...info,
-			...playerStats.find((element) => {
+			...playerStats[0].find((element) => {
+				console.log("element: " + element + "info: " + info.playerId);
 				if(element != undefined){
 					return element.playerId === info.playerId
 				}
 			}),
 		}));
+		console.log("playerStatsBiosTeams: " + playerStatsBiosTeams)
 
 		const playerStatsBiosTeamsSimplify = playerStatsBiosTeams.filter(element => {
+			console.log(element);
 			return element.playerId != undefined;
 		 });
 
+		console.log(playerStatsBiosTeamsSimplify)
 		res.send(playerStatsBiosTeamsSimplify);
 
-		async function getPlayersStats(playerId){
+		async function getPlayersStats(startDate, endDate, playerId){
 			return pool.getConnection()
     			.then(conn => { 
 					if(startDate === 'ALL'){
 						conn.end();
-    					return conn.query("Select PlayerId, count(PlayerId), sum(Goals), sum(Assists), sum(Goals + Assists) from player_stats WHERE PlayerId = ? GROUP BY PlayerId ORDER BY sum(Goals) DESC", [playerId])
+    					return conn.query("Select PlayerId, count(PlayerId), sum(Goals), sum(Assists), sum(Goals + Assists), sum(PlusMinus), sum(PIM), sum(SOG), avg(FOPer) from player_stats WHERE PlayerId = ? GROUP BY PlayerId ORDER BY sum(Goals) DESC", [playerId])
 					}
 					else{
 						conn.end();
-    					return conn.query("Select PlayerId, count(PlayerId), sum(Goals), sum(Assists), sum(Goals + Assists) from player_stats WHERE Dates >= ? AND Dates <= ? AND PlayerId = ? GROUP BY PlayerId ORDER BY sum(Goals) DESC", [startDate, endDate, playerId])
+    					return conn.query("Select PlayerId, count(PlayerId), sum(Goals), sum(Assists), sum(Goals + Assists), sum(PlusMinus), sum(PIM), sum(SOG), avg(FOPer) from player_stats WHERE Dates >= ? AND Dates <= ? AND PlayerId = ? GROUP BY PlayerId ORDER BY sum(Goals) DESC", [startDate, endDate, playerId])
 					}
 				})
 		}
@@ -657,7 +906,6 @@ app.get(`/fhmplayer`, async function (req, res) {
 					}
 				});
 		}
-		pool.end();
 })
 
 
@@ -779,6 +1027,6 @@ app.get(`/nhlteamstats`, async function (req, res) {
 		}
 })
 
-app.listen(port, () => {
+app.listen(port, '192.168.2.12', () => {
     console.log(`Example app listening on port ${port}`)
   })
