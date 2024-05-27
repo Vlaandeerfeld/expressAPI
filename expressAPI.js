@@ -534,79 +534,89 @@ app.get(`/fhmplayer`, async function (req, res) {
 	const playerTeam = await Promise.all(promise1)
 
 	const promise2 = playerTeam.map(async info => {
-		if(info != undefined){
 		return await getPlayersBio(season, info.TeamId)
 		.then(async data => {
-			const promise2a = await data.map(async data2 => {
-				if(data2.G != 20 && data2.PlayerId != undefined){
-					return ({
-						playerId: data2.PlayerId,
-						TeamId: data2.TeamId,
-						firstName: data2.First_Name,
-						lastName: data2.Last_Name,
-					});
-				}
-				else{
-					return ({
-						playerId: undefined,
-						TeamId: undefined,
-						firstName: undefined,
-						lastName: undefined,
-					});
-				}
-			})
+			const promise2a = await data.find(async data2 => {
+				data2.G != 20 && data2.PlayerId != undefined
+			});
 			return promise2a
 		})
-		.then(response => {return Promise.all(response)})
-	}
+		.then(response => {return Promise.resolve(response)})
 	});
-		const playerBios = await Promise.all(promise2)
-
-		const promise3 = playerBios.map(async info => {
-			    const promise3a = info.map(async info2 => {
-				if(info2.playerId != undefined){
-					const promise3b = await getPlayersStats(season, info2.playerId)
-						.then(async data => {
-								return data.find(data2 => {data2.PlayerId != undefined})
-							});
-							
-					const resultsb = await Promise.resolve(promise3b)
-					return resultsb;
-
-				}
-			});
-			const resultsa = await Promise.all(promise3a)
-			return resultsa;
+		
+	const playerBios = await Promise.all(promise2)
+	
+	const promise3 = playerBios.map(async info => {
+		return await getPlayersStats(season, info.PlayerId)
+			.then(async data => {
+				const promise1 =  await data.find(async data2 => {
+					data2.PlayerId != undefined
+				});
+				return promise1;
+			})
+			.then(response => {return Promise.resolve(response)})
 		});
 
 		const playerStats = await Promise.all(promise3);
 
-		console.log(playerStats[0]);
+		const playerStatsFiltered = playerStats.filter(element => {
+			return element !== undefined
+		});
 
 		const playerBiosTeam = playerBios.map(info => {
-			return info.map(data => {	
-				return [
-					playerTeam.filter((element) => element.playerId === data.playerId),
-					data,
-				]
-			});
+			return {
+				...playerTeam.filter((element) => element.PlayerId === info.PlayerId),
+				...info,
+			}
 		});
 
 		const playerStatsBiosTeams = playerBiosTeam.map(info => {
-			return info.map(data => {	
-				return {
-					...playerStats.find((element) => element.playerId === data.playerId),
-					...data,
-				}
-			});
+			return {
+				...playerStatsFiltered.find((element) => element.PlayerId === info.PlayerId),
+				...info,
+			}
 		});
 
-
 		const playerStatsBiosTeamsSimplify = playerStatsBiosTeams.filter(element => {
-			return element.playerId != undefined;
-		 });
+			return element.GP != undefined;
+		});
 
-		res.send(playerStatsBiosTeamsSimplify);
+		const reply = playerStatsBiosTeamsSimplify.map(data => {
+			return{
+				playerId: data.PlayerId,
+				GP: data.GP,
+				points: Number(data.Points),
+				FOPer: String(data.FOPer),
+				plusMinus: data.PlusMinus,
+				fights: data.Fights,
+				fightsWon: data.Fights_Won,
+				firstName: data.First_Name,
+				lastName: data.Last_Name,
+				season: data.Season,
+				teamId: data.TeamId,
+				leagueId: data.LeagueId,
+				goals: data.G,
+				assists: data.Assists,
+				PIM: data.PIM,
+				PPG: data.PPG,
+				PPA: data.PPA,
+				SHG: data.SHG,
+				SHA: data.SHA,
+				GR: data.GR,
+				GWG: data.GWG,
+				SOG: data.SOG,
+				HIT: data.HIT,
+				GvA: data.GvA,
+				TkA: data.TkA,
+				SB: data.SB,
+				TOI: data.TOI,
+				PPTOI: data.PPTOI,
+				SHTOI: data.SHTOI,
+			}
+		});
+
+		console.log(reply);
+		res.send(reply);
 				
 		async function getPlayersBio(season, teamId){
 			return pool.getConnection()
@@ -656,11 +666,12 @@ app.get(`/fhmplayer`, async function (req, res) {
 			.then(conn => { 
 				if(season === 'ALL'){
 					conn.end();
-					return conn.query("Select PlayerId, Season, TeamId, LeagueId, GP, G, A, G + A, PIM, PlusMinus, PPG, PPA, SHG, SHA, GR, GWG, SOG, FOW / FO, HIT, GvA, TkA, SB, TOI, PPTOI, SHTOI, Fights, Fights_Won from player_career_rs WHERE PlayerId = ? ORDER BY G + A DESC", [playerId])
+					return conn.query("Select PlayerId, Season, TeamId, LeagueId, GP, G, A, G + A as Points, PIM, PlusMinus, PPG, PPA, SHG, SHA, GR, GWG, SOG, FOW / FO as FOPer, HIT, GvA, TkA, SB, TOI, PPTOI, SHTOI, Fights, Fights_Won from player_career_rs WHERE PlayerId = ? ORDER BY G + A DESC", [playerId])
 				}
 				else{
 					conn.end();
-					return conn.query("Select PlayerId, Season, TeamId, LeagueId, GP, G, A, G + A, PIM, PlusMinus, PPG, PPA, SHG, SHA, GR, GWG, SOG, FOW / FO, HIT, GvA, TkA, SB, TOI, PPTOI, SHTOI, Fights, Fights_Won from player_career_rs WHERE Season = ? AND PlayerId = ? ORDER BY G + A DESC", [season.slice(0,3), playerId])
+					console.log(playerId);
+					return conn.query("Select PlayerId, Season, TeamId, LeagueId, GP, G, A, G + A as Points, PIM, PlusMinus, PPG, PPA, SHG, SHA, GR, GWG, SOG, FOW / FO as FOPer, HIT, GvA, TkA, SB, TOI, PPTOI, SHTOI, Fights, Fights_Won from player_career_rs WHERE Season = ? AND PlayerId = ? ORDER BY G + A DESC", [season.slice(0,4), playerId])
 				}
 			})
 	}
@@ -1027,6 +1038,6 @@ app.get(`/nhlteamstats`, async function (req, res) {
 		}
 })
 
-app.listen(port, '192.168.2.12', () => {
+app.listen(port, '100.115.92.201', () => {
     console.log(`Example app listening on port ${port}`)
   })
